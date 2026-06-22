@@ -107,10 +107,6 @@ http://127.0.0.1:17860
 
 正常情况下还在。配置保存于本机 `%AppData%\AIImageTool`，不依赖某一个浏览器的 localStorage。
 
-### API Key 会被上传到 GitHub 吗
-
-不会自动上传。API Key 不保存在项目目录里，而是保存在 `%AppData%\AIImageTool`。只要不要把这个本机配置目录打包进仓库，就不会把 API Key 一起发布。
-
 ### 连接测试失败但生成可能成功吗
 
 可能。部分 OpenAI 兼容中转站不支持 `/models` 之类的模型列表接口，导致连接测试失败，但生成接口仍然可用。

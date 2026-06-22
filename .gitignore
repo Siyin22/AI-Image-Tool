@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Logs and runtime output
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+server.verify.*.log
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*api-key*
+*apikey*
+*secret*
+
+# Local app data backups
+AIImageTool/
+settings.json
+history.json
+
+# Temporary files
+tmp/
+temp/
+.cache/
+*.tmp
+*.bak
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local agent/tooling folders
+.agents/
+.codex/

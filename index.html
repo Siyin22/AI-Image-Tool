@@ -1,0 +1,318 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI生图小工具</title>
+  <link rel="stylesheet" href="./styles.css?v=20260623-0008">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="topbar-kicker">创作工作台</span>
+        <div>
+          <h1>AI生图小工具</h1>
+          <p id="statusLine">本地运行，配置与历史记录保存在本机。</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <select id="activeConfigSelect" aria-label="当前配置"></select>
+        <button id="testConfigBtn" class="icon-btn" type="button" title="测试连接" aria-label="测试连接">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M13 2 5 13h5l-1 9 8-11h-5l1-9z"/>
+          </svg>
+        </button>
+        <button id="openSettingsBtn" class="icon-btn" type="button" title="配置中心" aria-label="配置中心">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="currentColor" stroke="none" fill-rule="evenodd" clip-rule="evenodd" d="M19.14 12.94c.04-.31.06-.62.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.08 7.08 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.58.23-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.3 8.48a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94s.02.63.06.94L2.42 14.16a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.4 1.05.71 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.8a.5.5 0 0 0 .49-.42l.36-2.54c.58-.23 1.13-.54 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.25A3.25 3.25 0 1 1 12 8.75a3.25 3.25 0 0 1 0 6.5Z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="left-panel" aria-label="生图参数">
+        <section class="panel-section">
+          <div class="section-title">
+            <div class="section-copy">
+              <span class="panel-kicker">输入</span>
+              <h2>提示词</h2>
+            </div>
+          </div>
+          <div class="textarea-stack">
+            <label class="field-block field-block-primary">
+              <span class="field-label">主提示词</span>
+              <textarea id="promptInput" rows="8" placeholder="例如：一张干净高级的咖啡杯产品海报，棚拍柔光，主体居中，背景简洁"></textarea>
+            </label>
+            <label class="field-block field-block-secondary">
+              <span class="field-label">负面提示词</span>
+              <textarea id="negativeInput" rows="3" placeholder="低清晰度，变形文字，杂乱背景"></textarea>
+            </label>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-title reference-title" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:nowrap;">
+            <div class="section-copy" style="min-width:0;flex:1 1 auto;">
+              <span class="panel-kicker">素材</span>
+              <h2>参考图</h2>
+            </div>
+            <div class="reference-actions" style="display:flex;flex-direction:row;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:nowrap;white-space:nowrap;flex:0 0 auto;">
+              <button id="uploadRefsBtn" class="section-action-btn" type="button">上传参考图</button>
+              <button id="clearRefsBtn" type="button">清空参考图</button>
+            </div>
+          </div>
+          <div class="reference-stack">
+            <input id="referenceInput" class="file-input-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+            <div id="referenceGrid" class="reference-grid"></div>
+            <div id="referenceStatus" class="upload-status hidden" aria-live="polite"></div>
+            <p id="referenceHint" class="field-hint">OpenAI 兼容图像编辑接口支持参考图；百炼需使用支持参考图的新模型。</p>
+          </div>
+        </section>
+
+        <section class="panel-section">
+          <div class="section-title">
+            <div class="section-copy">
+              <span class="panel-kicker">控制</span>
+              <h2>参数</h2>
+            </div>
+            <button id="savePresetBtn" type="button">保存预设</button>
+          </div>
+          <div class="parameter-grid">
+            <label>
+              风格
+              <select id="styleSelect">
+                <option value="none">默认</option>
+                <option value="photo">写实摄影</option>
+                <option value="product">产品海报</option>
+                <option value="illustration">插画</option>
+                <option value="ecommerce">电商主图</option>
+                <option value="cover">社媒封面</option>
+              </select>
+            </label>
+            <label>
+              比例
+              <select id="ratioSelect">
+                <option value="1:1">1:1</option>
+                <option value="3:4">3:4</option>
+                <option value="4:3">4:3</option>
+                <option value="9:16">9:16</option>
+                <option value="16:9">16:9</option>
+              </select>
+            </label>
+            <label class="field-span-full">
+              尺寸
+              <select id="sizeSelect">
+              </select>
+            </label>
+            <div id="customSizeFields" class="split-fields hidden field-span-full">
+              <label>
+                宽度
+                <input id="customWidthInput" type="number" min="64" step="8" placeholder="例如 1920">
+              </label>
+              <label>
+                高度
+                <input id="customHeightInput" type="number" min="64" step="8" placeholder="例如 1080">
+              </label>
+            </div>
+            <div class="field-hint-card field-span-full">
+              <p id="sizeHint" class="field-hint"></p>
+            </div>
+            <label>
+              数量
+              <input id="countInput" type="number" min="1" max="4" value="1">
+            </label>
+            <label>
+              质量
+              <select id="qualitySelect">
+                <option value="standard">标准</option>
+                <option value="hd">高清</option>
+                <option value="auto">自动</option>
+              </select>
+            </label>
+          </div>
+          <details>
+            <summary>高级参数</summary>
+            <div class="split-fields">
+              <label>
+                Seed
+                <input id="seedInput" type="number" placeholder="随机">
+              </label>
+              <label>
+                提示词遵循
+                <input id="guidanceInput" type="number" min="1" max="20" step="0.5" placeholder="默认">
+              </label>
+            </div>
+            <label>
+              步数
+              <input id="stepsInput" type="number" min="1" max="150" placeholder="默认">
+            </label>
+          </details>
+        </section>
+
+        <div class="primary-actions">
+          <button id="generateBtn" class="primary-btn" type="button">生成</button>
+          <button id="cancelBtn" type="button" disabled>中止</button>
+          <button id="clearBtn" type="button">清空</button>
+        </div>
+      </aside>
+
+      <section class="result-panel" aria-label="生成结果">
+        <div class="result-toolbar">
+          <div class="result-toolbar-copy">
+            <span class="panel-kicker">当前任务</span>
+            <h2>结果</h2>
+            <p id="taskSummary">等待生成任务。</p>
+          </div>
+          <div class="toolbar-group">
+            <button id="retryBtn" type="button" disabled>重试</button>
+            <button id="exportBtn" type="button">导出历史</button>
+          </div>
+        </div>
+        <div class="result-overview">
+          <section class="task-progress" aria-label="生成详情">
+            <div class="task-progress-head">
+              <strong>生成详情</strong>
+              <span id="taskStageBadge" class="task-stage-badge hidden"></span>
+            </div>
+            <div id="taskTimeline" class="task-timeline"></div>
+          </section>
+          <section class="task-compact" aria-label="任务状态">
+            <div class="task-compact-head">
+              <strong>任务状态</strong>
+            </div>
+            <div id="taskList" class="task-list"></div>
+          </section>
+        </div>
+        <section class="result-canvas" aria-label="最新结果">
+          <div class="result-canvas-head">
+            <strong>最新结果</strong>
+          </div>
+          <div id="resultGrid" class="result-grid"></div>
+        </section>
+      </section>
+    </main>
+
+    <section class="gallery-band">
+      <div class="gallery-head">
+        <div class="gallery-copy">
+          <span class="panel-kicker">历史记录</span>
+          <h2>图库</h2>
+        </div>
+        <div class="gallery-tools">
+          <input id="gallerySearch" type="search" placeholder="搜索提示词">
+          <select id="galleryFilter">
+            <option value="all">全部平台</option>
+            <option value="openai-compatible">OpenAI兼容</option>
+            <option value="bailian">阿里百炼</option>
+            <option value="custom">自定义</option>
+          </select>
+          <button id="clearHistoryBtn" type="button">清理历史</button>
+          <button id="deleteSelectedBtn" type="button" disabled>删除选中</button>
+        </div>
+      </div>
+      <div id="galleryGrid" class="gallery-grid"></div>
+    </section>
+  </div>
+
+  <dialog id="settingsDialog">
+    <form method="dialog" class="settings-form">
+      <div class="dialog-head">
+        <div>
+          <h2>配置中心</h2>
+          <p>API Key 会使用当前 Windows 账号加密后保存在本机。保存后可留空，表示不修改已保存的 Key。</p>
+        </div>
+        <button value="cancel" type="submit" title="关闭">×</button>
+      </div>
+
+      <div class="settings-layout">
+        <div class="config-list">
+          <button id="newConfigBtn" type="button">+ 新增配置</button>
+          <div id="configList"></div>
+        </div>
+
+        <div class="config-editor">
+          <label>
+            配置名称
+            <input id="configNameInput" type="text" placeholder="例如：默认中转站">
+          </label>
+          <label>
+            平台类型
+            <select id="providerTypeInput">
+              <option value="openai-compatible">OpenAI兼容</option>
+              <option value="bailian">阿里百炼</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <label>
+            API Key
+            <input id="apiKeyInput" type="password" autocomplete="off" placeholder="未保存 API Key">
+          </label>
+          <label>
+            网关地址
+            <input id="baseUrlInput" type="url" placeholder="https://api.openai.com/v1">
+          </label>
+          <label>
+            默认模型
+            <input id="modelInput" type="text" placeholder="例如：gpt-image-1 或 wanx2.1-t2i-turbo">
+          </label>
+          <div class="split-fields">
+            <label>
+              优先级
+              <input id="priorityInput" type="number" min="1" value="1">
+            </label>
+            <label>
+              超时秒数
+              <input id="timeoutInput" type="number" min="15" value="120">
+            </label>
+          </div>
+          <label class="checkbox-row">
+            <input id="autoFallbackInput" type="checkbox" checked>
+            失败后自动切换备用配置
+          </label>
+          <label class="checkbox-row">
+            <input id="enabledInput" type="checkbox" checked>
+            启用配置
+          </label>
+          <div class="dialog-actions">
+            <button id="deleteConfigBtn" type="button">删除</button>
+            <button id="saveConfigBtn" class="primary-btn" type="button">保存配置</button>
+          </div>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="taskTemplate">
+    <article class="task-row">
+      <div>
+        <strong class="task-title"></strong>
+        <p class="task-meta"></p>
+      </div>
+      <span class="task-state"></span>
+    </article>
+  </template>
+
+  <template id="imageTemplate">
+    <article class="image-tile">
+      <label class="tile-select">
+        <input class="select-image-checkbox" type="checkbox">
+        选择
+      </label>
+      <div class="image-wrap"></div>
+      <div class="image-info">
+        <strong></strong>
+        <p></p>
+        <div>
+          <button class="download-btn" type="button">下载</button>
+          <button class="reuse-btn" type="button">复用</button>
+          <button class="delete-image-btn" type="button">删除</button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <script src="./app.js?v=20260623-0020"></script>
+</body>
+</html>

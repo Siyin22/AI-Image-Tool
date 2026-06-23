@@ -574,7 +574,7 @@ function referenceFileToBlob(item) {
   return new Blob([buffer], { type: meta.type || item.type || "image/png" });
 }
 
-function buildOpenAiEditForm(config, task) {
+function buildOpenAiEditForm(config, task, imageFieldName = "image") {
   const form = new FormData();
   form.append("model", config.model || task.model);
   form.append("prompt", stylePrompt(task.prompt, task.stylePreset));
@@ -584,11 +584,32 @@ function buildOpenAiEditForm(config, task) {
   const images = task.referenceImages || [];
   images.forEach((item, index) => {
     const meta = ensureReferenceFile(item.fileId);
-    const extension = (meta.type || item.type || "image/png").split("/")[1] || "png";
-    const filename = item.name || meta.name || `reference-${index + 1}.${extension}`;
-    form.append(images.length === 1 ? "image" : "image[]", referenceFileToBlob(item), filename);
+    const extension = contentTypeExtension(meta.type || item.type || "image/png");
+    const filename = `reference-${index + 1}.${extension}`;
+    form.append(imageFieldName, referenceFileToBlob(item), filename);
   });
   return form;
+}
+
+function shouldRetryOpenAiEditWithLegacyImages(error, task) {
+  return (task.referenceImages || []).length > 1
+    && ["bad_request", "not_found", "server", "network_error"].includes(error?.code);
+}
+
+function extractOpenAiCompatibleImages(json, config, task) {
+  const data = Array.isArray(json?.data)
+    ? json.data
+    : (Array.isArray(json?.images) ? json.images : []);
+  return data.map((item, index) => ({
+    id: `img_${Date.now()}_${index}`,
+    url: item.url || item.image_url || item.output_url || item.image || null,
+    b64: item.b64_json || item.base64 || item.image_base64 || null,
+    revisedPrompt: item.revised_prompt || null,
+    provider: config.providerType,
+    model: config.model || task.model,
+    width: Number((task.size || "").split("x")[0]) || null,
+    height: Number((task.size || "").split("x")[1]) || null
+  })).filter(item => item.url || item.b64);
 }
 
 async function generateOpenAiCompatible(config, task, signal) {
@@ -602,31 +623,48 @@ async function generateOpenAiCompatible(config, task, signal) {
   const hasReferenceImages = Array.isArray(task.referenceImages) && task.referenceImages.length > 0;
   const url = hasReferenceImages ? buildEditUrl(config) : buildGenerationUrl(config);
   if (hasReferenceImages) {
-    const form = buildOpenAiEditForm(config, { ...task, model: config.model || task.model });
-    const json = await fetchJson(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${config.apiKey}`
-      },
-      body: form
-    }, config.timeoutSeconds, signal);
+    const requestTask = { ...task, model: config.model || task.model };
+    let json;
+    try {
+      const form = buildOpenAiEditForm(config, requestTask, "image");
+      json = await fetchJson(url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${config.apiKey}`
+        },
+        body: form
+      }, config.timeoutSeconds, signal);
+    } catch (error) {
+      if (!shouldRetryOpenAiEditWithLegacyImages(error, task)) throw error;
+      setTaskStatus(task.id, {
+        stage: "retrying",
+        text: "正在改用兼容格式重试",
+        detail: "外部接口没有接受多参考图的标准 image 字段，正在尝试 image[] 字段格式。"
+      });
+      const legacyForm = buildOpenAiEditForm(config, requestTask, "image[]");
+      try {
+        json = await fetchJson(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${config.apiKey}`
+          },
+          body: legacyForm
+        }, config.timeoutSeconds, signal);
+      } catch (retryError) {
+        retryError.detail = [
+          retryError.detail || retryError.message,
+          `首次请求失败：${error.detail || error.message}`
+        ].filter(Boolean).join("；");
+        throw retryError;
+      }
+    }
 
     setTaskStatus(task.id, {
       stage: "finalizing",
       text: "接口已返回，正在整理图片结果",
       detail: "正在读取平台返回的图片地址与元信息。"
     });
-    const data = Array.isArray(json?.data) ? json.data : [];
-    const images = data.map((item, index) => ({
-      id: `img_${Date.now()}_${index}`,
-      url: item.url || null,
-      b64: item.b64_json || null,
-      revisedPrompt: item.revised_prompt || null,
-      provider: config.providerType,
-      model: config.model || task.model,
-      width: Number((task.size || "").split("x")[0]) || null,
-      height: Number((task.size || "").split("x")[1]) || null
-    })).filter(item => item.url || item.b64);
+    const images = extractOpenAiCompatibleImages(json, config, task);
 
     if (!images.length) {
       throw userError("接口已返回，但没有找到图片数据。", "empty_result", json);
@@ -649,17 +687,7 @@ async function generateOpenAiCompatible(config, task, signal) {
     text: "接口已返回，正在整理图片结果",
     detail: "正在读取平台返回的图片地址与元信息。"
   });
-  const data = Array.isArray(json?.data) ? json.data : [];
-  const images = data.map((item, index) => ({
-    id: `img_${Date.now()}_${index}`,
-    url: item.url || null,
-    b64: item.b64_json || null,
-    revisedPrompt: item.revised_prompt || null,
-    provider: config.providerType,
-    model: body.model,
-    width: Number(body.size.split("x")[0]) || null,
-    height: Number(body.size.split("x")[1]) || null
-  })).filter(item => item.url || item.b64);
+  const images = extractOpenAiCompatibleImages(json, config, { ...task, model: body.model, size: body.size });
 
   if (!images.length) {
     throw userError("接口已返回，但没有找到图片数据。", "empty_result", json);

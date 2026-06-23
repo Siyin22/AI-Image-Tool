@@ -1433,7 +1433,12 @@ async function postJson(url, payload, signal) {
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok || json.ok === false) {
-    throw new Error(json.message || "请求失败。");
+    const message = json.message || "请求失败。";
+    const detail = typeof json.detail === "string" ? json.detail.trim() : "";
+    const error = new Error(detail && detail !== message ? `${message}（详情：${detail}）` : message);
+    error.code = json.code || "";
+    error.detail = detail;
+    throw error;
   }
   return json;
 }

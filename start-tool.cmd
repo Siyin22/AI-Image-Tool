@@ -13,7 +13,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Method POST -Uri '%URL%/api/load-state' -ContentType 'application/json' -Body '{}'; if ($r.StatusCode -eq 200) { exit 0 } exit 1 } catch { exit 1 }" >nul 2>nul
+node -e "fetch('%URL%/api/load-state',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(350)}).then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))" >nul 2>nul
 if not errorlevel 1 (
   start "" "%URL%"
   echo AI Image Tool is already running.
@@ -21,7 +21,7 @@ if not errorlevel 1 (
   exit /b 0
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$c = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort %PORT% -State Listen -ErrorAction SilentlyContinue; if ($c) { exit 0 } exit 1" >nul 2>nul
+node -e "const net=require('net'); const s=net.createServer(); s.once('error',()=>process.exit(0)); s.once('listening',()=>s.close(()=>process.exit(1))); s.listen(%PORT%,'127.0.0.1');" >nul 2>nul
 if not errorlevel 1 (
   echo Port %PORT% is being used by another local program.
   echo Please close that program, or change PORT in this file.

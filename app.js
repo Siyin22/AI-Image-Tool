@@ -293,7 +293,7 @@ async function loadState() {
     return { source: "browser" };
   }
   try {
-    const json = await postJson("/api/load-state", { legacyState });
+    const json = await loadServerState(legacyState);
     const recoveredState = await recoverLegacyStateToServer(legacyState, json);
     applyLoadedState(recoveredState || json);
     writeLegacyBackupState();
@@ -306,6 +306,32 @@ async function loadState() {
     applyLoadedState(legacyState);
     return { source: "browser" };
   }
+}
+
+async function loadServerState(legacyState) {
+  const retryDelays = [0, 120, 240, 480, 800, 1200];
+  let lastError = null;
+  for (const delayMs of retryDelays) {
+    if (delayMs) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    try {
+      return await postJson("/api/load-state", { legacyState });
+    } catch (error) {
+      lastError = error;
+      if (!isTransientLoadStateError(error)) {
+        throw error;
+      }
+    }
+  }
+  throw lastError;
+}
+
+function isTransientLoadStateError(error) {
+  if (!error) return false;
+  if (error.name === "TypeError") return true;
+  const message = String(error.message || "");
+  return /Failed to fetch|NetworkError|fetch/i.test(message);
 }
 
 function normalizeLegacyConfig(config) {

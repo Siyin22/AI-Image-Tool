@@ -109,7 +109,7 @@ function unprotectTextForCurrentUser(protectedText) {
 function normalizeStoredConfig(config, index, existingConfig) {
   const previous = existingConfig || {};
   const rawApiKey = String(config?.apiKey || "").trim();
-  const keepProtectedApiKey = previous.protectedApiKey || "";
+  const keepProtectedApiKey = String(config?.protectedApiKey || previous.protectedApiKey || "");
   const protectedApiKey = rawApiKey
     ? protectTextForCurrentUser(rawApiKey)
     : keepProtectedApiKey;

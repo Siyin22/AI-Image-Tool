@@ -39,6 +39,10 @@ const bailianV2SizeOptions = {
   "16:9": ["1696x960", "1920x1080"]
 };
 
+function getBailianCapabilities(model) {
+  return window.BailianModels.getBailianModelCapabilities(model);
+}
+
 const MAX_REFERENCE_IMAGES = 12;
 const MAX_REFERENCE_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_REFERENCE_TOTAL_BYTES = 96 * 1024 * 1024;
@@ -481,7 +485,10 @@ function renderSizeOptions(keepValue) {
 
 function getSizeOptionsForCurrentConfig() {
   const active = getActiveConfig();
-  if (active?.providerType === "bailian" && /^wan2\.(6|7|8)/i.test(active.model || "")) {
+  const capabilities = active?.providerType === "bailian"
+    ? getBailianCapabilities(active.model)
+    : null;
+  if (capabilities?.family === "wan-v2") {
     return bailianV2SizeOptions[el.ratioSelect.value] || bailianV2SizeOptions["1:1"];
   }
   return ratioSizeOptions[el.ratioSelect.value] || ratioSizeOptions["1:1"];
@@ -501,10 +508,13 @@ function updateCapabilityHints() {
   if (!active) return;
   const provider = active.providerType;
   const model = active.model || "";
-  const bailianRefReady = provider === "bailian" && /^wan2\.(6|7|8)/i.test(model);
+  const bailianCapabilities = provider === "bailian" ? getBailianCapabilities(model) : null;
+  const bailianRefReady = Boolean(bailianCapabilities?.supportsReferenceImages);
 
-  if (provider === "bailian" && bailianRefReady) {
+  if (provider === "bailian" && bailianCapabilities?.family === "wan-v2") {
     el.sizeHint.textContent = "百炼新图像模型：总像素建议在 1280×1280 到 1440×1440 之间，宽高比需在 1:4 到 4:1 之间；当前列表优先展示官方推荐尺寸。";
+  } else if (provider === "bailian" && bailianCapabilities?.family === "qwen-image") {
+    el.sizeHint.textContent = "百炼千问图像模型：使用原生同步图像接口；尺寸和数量限制会随具体模型变化，请优先使用常用尺寸或以百炼模型文档为准。";
   } else if (provider === "bailian") {
     el.sizeHint.textContent = "百炼旧通义万相模型：尺寸限制随模型变化，建议优先使用列表内尺寸；报参数错误时请换用平台推荐尺寸。";
   } else if (provider === "openai-compatible") {
@@ -516,11 +526,13 @@ function updateCapabilityHints() {
   const hasRefs = state.referenceImages.length > 0;
   const refSupported = provider === "openai-compatible" || provider === "custom" || bailianRefReady;
   if (hasRefs && !refSupported) {
-    el.referenceHint.textContent = "当前平台暂未接入参考图请求。请切换到 OpenAI 兼容、自定义，或百炼 wan2.6+ 模型。";
+    el.referenceHint.textContent = "当前平台暂未接入参考图请求。请切换到 OpenAI 兼容、自定义，或百炼 wan2.6+、qwen-image-edit、qwen-image-2.0/3.0 模型。";
+  } else if (provider === "bailian" && bailianCapabilities?.family === "qwen-image" && bailianRefReady) {
+    el.referenceHint.textContent = "百炼千问图像模型已开放参考图支持；如果平台返回字段错误，请确认当前模型已在百炼控制台开通。";
   } else if (bailianRefReady) {
     el.referenceHint.textContent = "百炼 wan2.6+ 已开放参考图实验支持；如果平台返回字段错误，请先切回纯文生图或 OpenAI 兼容接口。";
   } else {
-    el.referenceHint.textContent = `上传参考图后，OpenAI 兼容/自定义接口会走图像编辑请求；百炼需使用 wan2.6+。当前最多 ${MAX_REFERENCE_IMAGES} 张，单张建议不超过 ${Math.round(MAX_REFERENCE_FILE_BYTES / 1024 / 1024)}MB。`;
+    el.referenceHint.textContent = `上传参考图后，OpenAI 兼容/自定义接口会走图像编辑请求；百炼需使用 wan2.6+、qwen-image-edit 或 qwen-image-2.0/3.0。当前最多 ${MAX_REFERENCE_IMAGES} 张，单张建议不超过 ${Math.round(MAX_REFERENCE_FILE_BYTES / 1024 / 1024)}MB。`;
   }
 }
 
@@ -937,7 +949,7 @@ async function generateWithFallback(retryTask, retryConfig) {
   }
   if (!configs.length) {
     toast(task.referenceImages?.length
-      ? "当前没有支持参考图的启用配置，请切换 OpenAI 兼容、自定义，或百炼 wan2.6+ 模型。"
+      ? "当前没有支持参考图的启用配置，请切换 OpenAI 兼容、自定义，或百炼 wan2.6+、qwen-image-edit、qwen-image-2.0/3.0 模型。"
       : "没有可用配置，请先在配置中心启用 API。", "warn");
     return;
   }
@@ -993,7 +1005,9 @@ async function generateWithFallback(retryTask, retryConfig) {
       pushTaskEvent(
         "已提交到平台",
         config.providerType === "bailian"
-          ? "平台已接收任务，接下来会进入异步排队与轮询阶段。"
+          ? getBailianCapabilities(config.model).requestMode === "sync"
+            ? "平台正在同步生成图片，等待结果返回。"
+            : "平台已接收任务，接下来会进入异步排队与轮询阶段。"
           : "平台正在生成图片，等待返回结果。"
       );
       const result = await postJson("/api/generate", { config, task }, state.currentController.signal);
@@ -1178,7 +1192,7 @@ function isFallbackable(error) {
 
 function supportsReferenceImages(config) {
   if (config?.providerType === "openai-compatible" || config?.providerType === "custom") return true;
-  return config?.providerType === "bailian" && /^wan2\.(6|7|8)/i.test(config.model || "");
+  return config?.providerType === "bailian" && getBailianCapabilities(config.model).supportsReferenceImages;
 }
 
 function normalizeImages(images, task, config) {

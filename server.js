@@ -6,6 +6,7 @@ const crypto = require("crypto");
 const dns = require("dns");
 const { execFileSync } = require("child_process");
 const { URL } = require("url");
+const { getBailianModelCapabilities } = require("./bailian-models");
 
 const host = "127.0.0.1";
 const preferredPort = Number(process.env.PORT || 17860);
@@ -716,24 +717,21 @@ function buildBailianBody(config, task) {
   };
 }
 
-function isBailianV2Model(model) {
-  return /^wan2\.(6|7|8)/i.test(String(model || ""));
+function bailianGatewayUrl(config) {
+  const baseUrl = cleanBaseUrl(config.baseUrl, "https://dashscope.aliyuncs.com/api/v1");
+  const serviceIndex = baseUrl.search(/\/services\/aigc(?:\/|$)/i);
+  return serviceIndex >= 0 ? baseUrl.slice(0, serviceIndex) : baseUrl;
 }
 
 function bailianRootUrl(config) {
-  const baseUrl = cleanBaseUrl(config.baseUrl, "https://dashscope.aliyuncs.com/api/v1");
+  const baseUrl = bailianGatewayUrl(config);
   const apiIndex = baseUrl.indexOf("/api/v1");
   if (apiIndex >= 0) return baseUrl.slice(0, apiIndex + "/api/v1".length);
   return baseUrl;
 }
 
-function bailianCreateUrl(config, protocol) {
-  const baseUrl = cleanBaseUrl(config.baseUrl, "https://dashscope.aliyuncs.com/api/v1");
-  if (/\/services\/aigc\//i.test(baseUrl)) return baseUrl;
-  const path = protocol === "v2"
-    ? "/services/aigc/image-generation/generation"
-    : "/services/aigc/text2image/image-synthesis";
-  return `${baseUrl}${path}`;
+function bailianCreateUrl(config, capabilities) {
+  return `${bailianGatewayUrl(config)}${capabilities.createPath}`;
 }
 
 function buildBailianV2Body(config, task) {
@@ -846,27 +844,28 @@ function extractBailianImages(output, provider, model, task) {
 
 async function generateBailian(config, task, signal) {
   const model = config.model || task.model || "wan2.6-t2i";
-  const protocol = isBailianV2Model(model) ? "v2" : "v1";
-  if (task.referenceImages?.length && protocol !== "v2") {
-    throw userError("当前百炼模型暂不支持参考图，请切换到 wan2.6 或更新模型。", "unsupported_reference");
+  const capabilities = getBailianModelCapabilities(model);
+  if (task.referenceImages?.length && !capabilities.supportsReferenceImages) {
+    throw userError("当前百炼模型暂不支持参考图，请切换到 wan2.6+、qwen-image-edit 或 qwen-image-2.0/3.0 模型。", "unsupported_reference");
   }
-  const createUrl = bailianCreateUrl(config, protocol);
-  const rootUrl = bailianRootUrl(config);
+  const createUrl = bailianCreateUrl(config, capabilities);
   const headers = {
     "Content-Type": "application/json",
-    "Authorization": `Bearer ${config.apiKey}`,
-    "X-DashScope-Async": "enable"
+    "Authorization": `Bearer ${config.apiKey}`
   };
+  if (capabilities.requestMode === "async") headers["X-DashScope-Async"] = "enable";
   if (config.workspace) headers["X-DashScope-WorkSpace"] = config.workspace;
 
-  const createBody = protocol === "v2"
+  const createBody = capabilities.family !== "legacy"
     ? (task.referenceImages?.length ? buildBailianV2ReferenceBody(config, task) : buildBailianV2Body(config, task))
     : buildBailianBody(config, task);
   setTaskStatus(task.id, {
     stage: "submitting",
     text: "正在提交到百炼",
-    detail: protocol === "v2"
-      ? "百炼新图像接口已准备提交。"
+    detail: capabilities.requestMode === "sync"
+      ? "百炼千问图像接口已准备提交。"
+      : capabilities.family === "wan-v2"
+        ? "百炼新图像接口已准备提交。"
       : "百炼旧通义万相接口已准备提交。"
   });
   const created = await fetchJson(createUrl, {
@@ -874,6 +873,17 @@ async function generateBailian(config, task, signal) {
     headers,
     body: JSON.stringify(createBody)
   }, config.timeoutSeconds, signal);
+
+  if (capabilities.requestMode === "sync") {
+    setTaskStatus(task.id, {
+      stage: "finalizing",
+      text: "百炼已完成，正在整理结果",
+      detail: "正在提取千问图像接口返回的图片地址。"
+    });
+    const images = extractBailianImages(created?.output || created, "bailian", createBody.model, task);
+    if (!images.length) throw userError("接口已返回，但没有找到图片地址。", "empty_result", created);
+    return { images };
+  }
 
   const taskId = created?.output?.task_id || created?.task_id;
   if (!taskId) {
@@ -885,6 +895,7 @@ async function generateBailian(config, task, signal) {
     detail: `任务编号 ${taskId}，正在等待平台处理。`
   });
 
+  const rootUrl = bailianRootUrl(config);
   const startedAt = Date.now();
   const maxMs = Math.max(30, config.timeoutSeconds || 120) * 1000;
   let last = null;

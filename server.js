@@ -87,24 +87,57 @@ function protectTextForCurrentUser(text) {
   if (!text) return "";
   if (process.platform !== "win32") return Buffer.from(String(text), "utf8").toString("base64");
   const output = runPowerShell(`
+    $ErrorActionPreference = "Stop"
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     $payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
-    $secure = ConvertTo-SecureString -String ([string]$payload.value) -AsPlainText -Force
-    ConvertFrom-SecureString -SecureString $secure
+    Add-Type -AssemblyName System.Security
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$payload.value)
+    $protected = [System.Security.Cryptography.ProtectedData]::Protect(
+      $bytes,
+      $null,
+      [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    )
+    [Convert]::ToBase64String($protected)
   `, { value: String(text) });
-  return String(output || "").replace(/\r?\n/g, "");
+  return `dpapi:${String(output || "").replace(/\r?\n/g, "")}`;
 }
 
 function unprotectTextForCurrentUser(protectedText) {
   if (!protectedText) return "";
   if (process.platform !== "win32") return Buffer.from(String(protectedText), "base64").toString("utf8");
+  const storedValue = String(protectedText);
   return runPowerShell(`
+    $ErrorActionPreference = "Stop"
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     $payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
-    $secure = ConvertTo-SecureString -String ([string]$payload.value)
-    $credential = New-Object System.Management.Automation.PSCredential ('ignored', $secure)
-    $credential.GetNetworkCredential().Password
-  `, { value: String(protectedText) });
+    Add-Type -AssemblyName System.Security
+    $format = [string]$payload.format
+    if ($format -eq "legacy") {
+      $hex = [string]$payload.value
+      if (($hex.Length % 2) -ne 0 -or $hex -notmatch "^[0-9a-fA-F]+$") {
+        throw "Unsupported local API Key format."
+      }
+      $protected = New-Object byte[] ($hex.Length / 2)
+      for ($index = 0; $index -lt $protected.Length; $index++) {
+        $protected[$index] = [Convert]::ToByte($hex.Substring($index * 2, 2), 16)
+      }
+    } else {
+      $protected = [Convert]::FromBase64String([string]$payload.value)
+    }
+    $bytes = [System.Security.Cryptography.ProtectedData]::Unprotect(
+      $protected,
+      $null,
+      [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    )
+    if ($format -eq "legacy") {
+      [System.Text.Encoding]::Unicode.GetString($bytes)
+    } else {
+      [System.Text.Encoding]::UTF8.GetString($bytes)
+    }
+  `, {
+    format: storedValue.startsWith("dpapi:") ? "dpapi" : "legacy",
+    value: storedValue.startsWith("dpapi:") ? storedValue.slice("dpapi:".length) : storedValue
+  });
 }
 
 function normalizeStoredConfig(config, index, existingConfig) {

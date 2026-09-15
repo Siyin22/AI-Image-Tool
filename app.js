@@ -43,9 +43,40 @@ function getBailianCapabilities(model) {
   return window.BailianModels.getBailianModelCapabilities(model);
 }
 
-const MAX_REFERENCE_IMAGES = 12;
-const MAX_REFERENCE_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_REFERENCE_TOTAL_BYTES = 96 * 1024 * 1024;
+const referenceUploadLimits = {
+  bailian: {
+    maxImages: 3,
+    maxFileBytes: 10 * 1024 * 1024,
+    maxTotalBytes: 30 * 1024 * 1024
+  },
+  "openai-compatible": {
+    maxImages: 16,
+    maxFileBytes: 50 * 1024 * 1024,
+    maxTotalBytes: 200 * 1024 * 1024
+  },
+  custom: {
+    maxImages: 12,
+    maxFileBytes: 10 * 1024 * 1024,
+    maxTotalBytes: 96 * 1024 * 1024
+  }
+};
+
+function getReferenceLimits(providerType) {
+  return referenceUploadLimits[providerType] || referenceUploadLimits.custom;
+}
+
+function formatMb(bytes) {
+  return `${Math.round(bytes / 1024 / 1024)}MB`;
+}
+
+function referenceImagesWithinLimits(providerType, referenceImages) {
+  const limits = getReferenceLimits(providerType);
+  const list = referenceImages || [];
+  const totalBytes = list.reduce((sum, item) => sum + (item.size || 0), 0);
+  return list.length <= limits.maxImages
+    && list.every(item => (item.size || 0) <= limits.maxFileBytes)
+    && totalBytes <= limits.maxTotalBytes;
+}
 
 const state = {
   configs: [],
@@ -527,12 +558,18 @@ function updateCapabilityHints() {
   const refSupported = provider === "openai-compatible" || provider === "custom" || bailianRefReady;
   if (hasRefs && !refSupported) {
     el.referenceHint.textContent = "当前平台暂未接入参考图请求。请切换到 OpenAI 兼容、自定义，或百炼 wan2.6+、qwen-image-edit、qwen-image-2.0/3.0 模型。";
+  } else if (hasRefs && !referenceImagesWithinLimits(provider, state.referenceImages)) {
+    const limits = getReferenceLimits(provider);
+    el.referenceHint.textContent = `当前参考图超出 ${providerLabel(provider)} 的限制（最多 ${limits.maxImages} 张、单张 ${formatMb(limits.maxFileBytes)}、总计 ${formatMb(limits.maxTotalBytes)}），请删除或压缩部分图片后再生成。`;
   } else if (provider === "bailian" && bailianCapabilities?.family === "qwen-image" && bailianRefReady) {
-    el.referenceHint.textContent = "百炼千问图像模型已开放参考图支持；如果平台返回字段错误，请确认当前模型已在百炼控制台开通。";
+    const limits = getReferenceLimits(provider);
+    el.referenceHint.textContent = `百炼千问图像模型已开放参考图支持；最多上传 ${limits.maxImages} 张、单张不超过 ${formatMb(limits.maxFileBytes)}。如果平台返回字段错误，请确认当前模型已在百炼控制台开通。`;
   } else if (bailianRefReady) {
-    el.referenceHint.textContent = "百炼 wan2.6+ 已开放参考图实验支持；如果平台返回字段错误，请先切回纯文生图或 OpenAI 兼容接口。";
+    const limits = getReferenceLimits("bailian");
+    el.referenceHint.textContent = `百炼 wan2.6+ 已开放参考图实验支持；最多上传 ${limits.maxImages} 张、单张不超过 ${formatMb(limits.maxFileBytes)}。如果平台返回字段错误，请先切回纯文生图或 OpenAI 兼容接口。`;
   } else {
-    el.referenceHint.textContent = `上传参考图后，OpenAI 兼容/自定义接口会走图像编辑请求；百炼需使用 wan2.6+、qwen-image-edit 或 qwen-image-2.0/3.0。当前最多 ${MAX_REFERENCE_IMAGES} 张，单张建议不超过 ${Math.round(MAX_REFERENCE_FILE_BYTES / 1024 / 1024)}MB。`;
+    const limits = getReferenceLimits(provider);
+    el.referenceHint.textContent = `上传参考图后，OpenAI 兼容/自定义接口会走图像编辑请求；百炼需使用 wan2.6+、qwen-image-edit 或 qwen-image-2.0/3.0 模型。当前配置（${providerLabel(provider)}）最多 ${limits.maxImages} 张，单张不超过 ${formatMb(limits.maxFileBytes)}，总计不超过 ${formatMb(limits.maxTotalBytes)}。`;
   }
 }
 
@@ -944,14 +981,23 @@ async function generateWithFallback(retryTask, retryConfig) {
   }
 
   let configs = buildConfigQueue(retryConfig || getActiveConfig());
-  if (task.referenceImages?.length) {
-    configs = configs.filter(supportsReferenceImages);
-  }
   if (!configs.length) {
-    toast(task.referenceImages?.length
-      ? "当前没有支持参考图的启用配置，请切换 OpenAI 兼容、自定义，或百炼 wan2.6+、qwen-image-edit、qwen-image-2.0/3.0 模型。"
-      : "没有可用配置，请先在配置中心启用 API。", "warn");
+    toast("没有可用配置，请先在配置中心启用 API。", "warn");
     return;
+  }
+  if (task.referenceImages?.length) {
+    const supporting = configs.filter(supportsReferenceImages);
+    configs = supporting.filter(config => referenceImagesWithinLimits(config.providerType, task.referenceImages));
+    if (!configs.length) {
+      if (supporting.length) {
+        const firstSupporting = supporting[0];
+        const limits = getReferenceLimits(firstSupporting.providerType);
+        toast(`参考图数量或大小超出 ${providerLabel(firstSupporting.providerType)} 的限制（最多 ${limits.maxImages} 张、单张 ${formatMb(limits.maxFileBytes)}、总计 ${formatMb(limits.maxTotalBytes)}），请删除或压缩部分参考图后重试。`, "warn");
+      } else {
+        toast("当前没有支持参考图的启用配置，请切换 OpenAI 兼容、自定义，或百炼 wan2.6+、qwen-image-edit、qwen-image-2.0/3.0 模型。", "warn");
+      }
+      return;
+    }
   }
 
   resetTaskProgress();
@@ -1321,19 +1367,22 @@ async function handleReferenceFiles(event) {
   const files = [...event.target.files || []];
   event.target.value = "";
   if (!files.length) return;
-  const available = Math.max(0, MAX_REFERENCE_IMAGES - state.referenceImages.length);
+  const active = getActiveConfig();
+  const limits = getReferenceLimits(active?.providerType);
+  const providerName = providerLabel(active?.providerType);
+  const available = Math.max(0, limits.maxImages - state.referenceImages.length);
   if (!available) {
-    throw new Error(`最多上传 ${MAX_REFERENCE_IMAGES} 张参考图。`);
+    throw new Error(`${providerName} 最多上传 ${limits.maxImages} 张参考图。`);
   }
   const accepted = files.slice(0, available);
-  const oversized = accepted.find(file => file.size > MAX_REFERENCE_FILE_BYTES);
+  const oversized = accepted.find(file => file.size > limits.maxFileBytes);
   if (oversized) {
-    throw new Error(`单张参考图不能超过 ${Math.round(MAX_REFERENCE_FILE_BYTES / 1024 / 1024)}MB。`);
+    throw new Error(`${providerName} 单张参考图不能超过 ${formatMb(limits.maxFileBytes)}（${oversized.name}）。`);
   }
   const currentTotalBytes = state.referenceImages.reduce((sum, item) => sum + (item.size || 0), 0);
   const nextTotalBytes = currentTotalBytes + accepted.reduce((sum, file) => sum + file.size, 0);
-  if (nextTotalBytes > MAX_REFERENCE_TOTAL_BYTES) {
-    throw new Error(`参考图总大小不能超过 ${Math.round(MAX_REFERENCE_TOTAL_BYTES / 1024 / 1024)}MB，请压缩后再试。`);
+  if (nextTotalBytes > limits.maxTotalBytes) {
+    throw new Error(`${providerName} 参考图总大小不能超过 ${formatMb(limits.maxTotalBytes)}，请压缩后再试。`);
   }
   const images = await Promise.all(accepted.map(uploadReferenceFile));
   state.referenceImages = [...state.referenceImages, ...images];

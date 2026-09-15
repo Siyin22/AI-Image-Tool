@@ -19,6 +19,13 @@ const warmedHosts = new Set();
 const storageDir = path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "AIImageTool");
 const configStateFile = path.join(storageDir, "settings.json");
 const historyStateFile = path.join(storageDir, "history.json");
+const maxReferenceUploadBytes = 50 * 1024 * 1024;
+const bailianReferenceLimits = {
+  maxImages: 3,
+  maxFileBytes: 10 * 1024 * 1024
+};
+const referenceRetentionMs = 24 * 60 * 60 * 1000;
+const referenceCleanupIntervalMs = 60 * 60 * 1000;
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -556,6 +563,22 @@ function removeReferenceFile(fileId) {
   fs.unlink(meta.path, () => {});
 }
 
+function cleanupReferenceFiles() {
+  fs.readdir(referenceDir, (error, names) => {
+    if (error) return;
+    const now = Date.now();
+    names.forEach(name => {
+      const filePath = path.join(referenceDir, name);
+      fs.stat(filePath, (statError, stat) => {
+        if (statError || !stat.isFile()) return;
+        if (now - stat.mtimeMs < referenceRetentionMs) return;
+        fs.unlink(filePath, () => {});
+        referenceFiles.delete(name.replace(/\.[^.]+$/, ""));
+      });
+    });
+  });
+}
+
 function normalizeHttpError(status, body) {
   const rawMessage = body?.error?.message || body?.message || body?.code || body?.raw || `HTTP ${status}`;
   if (status === 401 || status === 403) return userError("认证失败，请检查 API Key 或账号权限。", "auth", rawMessage);
@@ -881,6 +904,19 @@ async function generateBailian(config, task, signal) {
   if (task.referenceImages?.length && !capabilities.supportsReferenceImages) {
     throw userError("当前百炼模型暂不支持参考图，请切换到 wan2.6+、qwen-image-edit 或 qwen-image-2.0/3.0 模型。", "unsupported_reference");
   }
+  const referenceCount = (task.referenceImages || []).length;
+  if (referenceCount > bailianReferenceLimits.maxImages) {
+    throw userError(`百炼最多支持 ${bailianReferenceLimits.maxImages} 张参考图，请删除多余图片后重试。`, "too_many_references");
+  }
+  if (referenceCount) {
+    const oversized = task.referenceImages.find(item => {
+      const meta = referenceFiles.get(item.fileId);
+      return Number(meta?.size || item.size || 0) > bailianReferenceLimits.maxFileBytes;
+    });
+    if (oversized) {
+      throw userError(`百炼单张参考图不能超过 ${Math.round(bailianReferenceLimits.maxFileBytes / 1024 / 1024)}MB，请压缩后重新上传。`, "reference_too_large");
+    }
+  }
   const createUrl = bailianCreateUrl(config, capabilities);
   const headers = {
     "Content-Type": "application/json",
@@ -1020,7 +1056,10 @@ async function handleApi(req, res, route) {
       }
       const fileNameHeader = String(req.headers["x-file-name"] || "reference");
       const fileSize = Number(req.headers["x-file-size"] || 0);
-      const buffer = await readBinaryBody(req, 16 * 1024 * 1024);
+      if (fileSize > maxReferenceUploadBytes) {
+        throw userError(`参考图过大，单张最大支持 ${Math.round(maxReferenceUploadBytes / 1024 / 1024)}MB。`, "payload_too_large");
+      }
+      const buffer = await readBinaryBody(req, maxReferenceUploadBytes);
       const fileId = crypto.randomUUID();
       const ext = contentTypeExtension(contentType);
       const filePath = path.join(referenceDir, `${fileId}.${ext}`);
@@ -1187,5 +1226,8 @@ function start(port) {
     console.log(`AI生图小工具已启动：http://${host}:${port}`);
   });
 }
+
+cleanupReferenceFiles();
+setInterval(cleanupReferenceFiles, referenceCleanupIntervalMs);
 
 start(preferredPort);

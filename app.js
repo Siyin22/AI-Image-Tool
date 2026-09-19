@@ -133,7 +133,7 @@ function bindElements() {
 }
 
 function bindEvents() {
-  enforceReferenceActionLayout();
+  bindWorkbenchEvents();
   el.openSettingsBtn.addEventListener("click", () => {
     state.editingConfigId = state.activeConfigId || state.configs[0]?.id || "";
     renderConfigEditor();
@@ -166,38 +166,101 @@ function bindEvents() {
   el.galleryFilter.addEventListener("change", renderGallery);
 }
 
-function enforceReferenceActionLayout() {
-  const title = document.querySelector(".reference-title");
-  const actions = document.querySelector(".reference-actions");
-  if (!title || !actions) return;
-
-  Object.assign(title.style, {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: "12px",
-    flexWrap: "nowrap"
-  });
-
-  Object.assign(actions.style, {
-    display: "flex",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "flex-end",
-    gap: "8px",
-    flexWrap: "nowrap",
-    whiteSpace: "nowrap",
-    width: "auto",
-    marginLeft: "16px"
-  });
-
-  Array.from(actions.children).forEach(node => {
-    Object.assign(node.style, {
-      width: "auto",
-      minWidth: "max-content",
-      flex: "0 0 auto"
+function bindWorkbenchEvents() {
+  window.addEventListener("hashchange", () => renderPage(true));
+  renderPage(false);
+  document.querySelectorAll("[data-prompt]").forEach(button => {
+    button.addEventListener("click", () => {
+      if (el.promptInput.value.trim() && !confirm("用这条灵感替换当前提示词？")) return;
+      el.promptInput.value = button.dataset.prompt;
+      el.styleSelect.value = button.dataset.style;
+      el.promptInput.focus();
     });
   });
+  document.addEventListener("keydown", event => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" &&
+        !document.querySelector("dialog[open]") && !el.generateBtn.disabled && !document.getElementById("workspace").hidden) {
+      event.preventDefault();
+      generateWithFallback();
+    }
+  });
+  const zone = el.uploadRefsBtn;
+  ["dragenter", "dragover"].forEach(type => zone.addEventListener(type, event => {
+    event.preventDefault();
+    zone.classList.add("is-dragging");
+  }));
+  zone.addEventListener("dragleave", event => {
+    if (!zone.contains(event.relatedTarget)) zone.classList.remove("is-dragging");
+  });
+  zone.addEventListener("drop", event => {
+    event.preventDefault();
+    zone.classList.remove("is-dragging");
+    if (event.dataTransfer.files.length) {
+      handleReferenceFilesSafe({ target: { files: event.dataTransfer.files, value: "" } });
+    }
+  });
+  document.getElementById("presetSelect").addEventListener("change", event => {
+    const preset = state.presets.find(item => item.id === event.target.value);
+    if (!preset) return;
+    if (el.promptInput.value.trim() && !confirm("使用预设替换当前提示词与风格？")) {
+      event.target.value = "";
+      return;
+    }
+    el.promptInput.value = preset.prompt;
+    el.negativeInput.value = preset.negativePrompt || "";
+    el.negativeInput.closest("details").open = Boolean(preset.negativePrompt);
+    el.styleSelect.value = preset.stylePreset || "none";
+    el.promptInput.focus();
+  });
+  document.getElementById("closePreviewBtn").addEventListener("click", () => {
+    document.getElementById("previewDialog").close();
+  });
+  // Keep notifications visible inside native modal dialogs, which occupy the top layer.
+  document.querySelectorAll("dialog").forEach(dialog => {
+    dialog.addEventListener("close", () => {
+      document.body.append(document.getElementById("toastRegion"));
+    });
+  });
+}
+
+function renderPage(moveFocus = false) {
+  const gallery = location.hash === "#/gallery" || location.hash === "#gallery";
+  document.getElementById("workspace").hidden = gallery;
+  document.getElementById("galleryPage").hidden = !gallery;
+  document.querySelectorAll(".topbar-nav [data-page]").forEach(link => {
+    const active = link.dataset.page === (gallery ? "gallery" : "create");
+    link.classList.toggle("nav-active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  document.title = `${gallery ? "我的图库" : "创作工作台"} · AI生图小工具`;
+  if (moveFocus) {
+    document.getElementById(gallery ? "galleryPageTitle" : "workspace").focus({ preventScroll: true });
+    window.scrollTo({ top: 0, behavior: "instant" });
+  }
+}
+
+function renderPresets() {
+  const select = document.getElementById("presetSelect");
+  const previous = select.value;
+  select.replaceChildren(new Option(state.presets.length ? "选择已保存的预设" : "暂无预设，先保存一条提示词", ""));
+  state.presets.forEach(preset => select.add(new Option(trimText(preset.prompt, 36), preset.id)));
+  select.disabled = !state.presets.length;
+  if (state.presets.some(preset => preset.id === previous)) select.value = previous;
+}
+
+function openImagePreview(item) {
+  const dialog = document.getElementById("previewDialog");
+  const image = document.getElementById("previewImage");
+  image.src = item.url || `data:image/png;base64,${item.b64}`;
+  image.alt = item.prompt || "生成图片";
+  document.getElementById("previewPrompt").textContent = item.prompt || "未命名图片";
+  document.getElementById("previewDownloadBtn").onclick = () => downloadImage(item);
+  document.getElementById("previewReuseBtn").onclick = () => {
+    dialog.close();
+    reuseImage(item);
+  };
+  dialog.showModal();
 }
 
 function readLegacyState() {
@@ -467,6 +530,7 @@ async function persistHistory(options = {}) {
 }
 
 function renderAll() {
+  renderPresets();
   renderSizeOptions();
   renderActiveConfigSelect();
   renderConfigList();
@@ -714,9 +778,8 @@ function createTaskNode(task) {
 function renderResults(images) {
   el.resultGrid.innerHTML = "";
   if (!images.length) {
-    const empty = document.createElement("div");
-    empty.className = "placeholder";
-    empty.textContent = "生成完成后，图片会出现在这里。";
+    const empty = document.getElementById("canvasEmptyTemplate").content.cloneNode(true);
+    empty.querySelector(".start-creating").addEventListener("click", () => el.promptInput.focus());
     el.resultGrid.append(empty);
     return;
   }
@@ -732,10 +795,14 @@ function renderGallery() {
     const matchProvider = provider === "all" || item.provider === provider;
     return matchQuery && matchProvider;
   });
+  document.getElementById("galleryCount").textContent = query || provider !== "all"
+    ? `${items.length} / ${state.history.length}` : state.history.length;
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "placeholder";
-    empty.textContent = "图库暂时为空。";
+    empty.innerHTML = state.history.length
+      ? '<span class="gallery-empty-symbol" aria-hidden="true">⌕</span><strong>没有找到匹配的作品</strong><p>试试其他关键词，或切换平台筛选。</p>'
+      : '<span class="gallery-empty-symbol" aria-hidden="true">▧</span><strong>收藏每一次灵感成真</strong><p>生成的图片会自动保存在这里，方便随时回看与复用。</p>';
     el.galleryGrid.append(empty);
     state.selectedGalleryIds.clear();
     updateSelectedDeleteButton();
@@ -747,6 +814,7 @@ function renderGallery() {
 
 function renderReferenceImages() {
   el.referenceGrid.innerHTML = "";
+  el.clearRefsBtn.disabled = !state.referenceImages.length;
   el.referenceGrid.classList.toggle("is-empty", !state.referenceImages.length);
   if (!state.referenceImages.length) {
     const empty = document.createElement("div");
@@ -766,6 +834,7 @@ function renderReferenceImages() {
     button.type = "button";
     button.textContent = "×";
     button.title = "移除参考图";
+    button.setAttribute("aria-label", `移除参考图：${item.name}`);
     button.addEventListener("click", () => removeReferenceImage(item.id));
     node.append(image, button);
     el.referenceGrid.append(node);
@@ -781,6 +850,11 @@ function createImageTile(item, isFresh) {
   image.loading = "lazy";
   image.src = item.url || `data:image/png;base64,${item.b64}`;
   wrap.append(image);
+  wrap.addEventListener("click", () => openImagePreview(item));
+  wrap.setAttribute("aria-label", `放大查看：${item.prompt || "生成图片"}`);
+  image.addEventListener("error", () => {
+    image.alt = "图片暂时无法加载，可尝试下载或复用参数重新生成";
+  });
   node.querySelector("strong").textContent = item.prompt || "未命名图片";
   const refInfo = item.referenceCount ? ` · 参考图 ${item.referenceCount} 张` : "";
   node.querySelector("p").textContent = `${providerLabel(item.provider)} · ${item.model || "默认模型"}${refInfo} · ${formatTime(item.createdAt)}`;
@@ -972,6 +1046,7 @@ function getSelectedSize() {
 }
 
 async function generateWithFallback(retryTask, retryConfig) {
+  if (state.currentController) return;
   let task;
   try {
     task = retryTask || collectTask();
@@ -1143,6 +1218,9 @@ async function generateWithFallback(retryTask, retryConfig) {
 }
 
 function setGenerating(isGenerating) {
+  document.querySelector(".result-panel").setAttribute("aria-busy", String(isGenerating));
+  el.generateBtn.innerHTML = isGenerating ? "正在生成…" : '✦ 生成图片 <kbd>Ctrl ↵</kbd>';
+  if (isGenerating) document.getElementById("taskDetails").open = true;
   el.generateBtn.disabled = isGenerating;
   el.cancelBtn.disabled = !isGenerating;
   el.retryBtn.disabled = isGenerating || !state.lastTaskPayload;
@@ -1282,8 +1360,13 @@ function retryLastTask() {
 }
 
 function reuseImage(item) {
+  if (document.getElementById("workspace").hidden) {
+    history.pushState(null, "", "#/create");
+    renderPage(false);
+  }
   el.promptInput.value = item.originalPrompt || item.prompt || "";
   el.negativeInput.value = item.negativePrompt || "";
+  el.negativeInput.closest("details").open = Boolean(item.negativePrompt);
   const size = item.size || "1024x1024";
   el.ratioSelect.value = inferRatio(size);
   renderSizeOptions(size);
@@ -1296,7 +1379,8 @@ function reuseImage(item) {
   }
   el.styleSelect.value = item.stylePreset || "none";
   el.qualitySelect.value = item.quality || "standard";
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  el.promptInput.focus({ preventScroll: true });
+  window.scrollTo({ top: 0, behavior: "instant" });
   toast("参数已复用。", "success");
 }
 
@@ -1342,6 +1426,7 @@ function clearInputs() {
 }
 
 async function handleReferenceFilesSafe(event) {
+  if (!event.target.files?.length) return;
   try {
     setReferenceStatus("正在上传参考图...", "pending");
     updateStatus("正在上传参考图...");
@@ -1367,6 +1452,9 @@ async function handleReferenceFiles(event) {
   const files = [...event.target.files || []];
   event.target.value = "";
   if (!files.length) return;
+  if (files.some(file => !["image/png", "image/jpeg", "image/webp"].includes(file.type))) {
+    throw new Error("请上传 PNG、JPG 或 WebP 格式的图片。");
+  }
   const active = getActiveConfig();
   const limits = getReferenceLimits(active?.providerType);
   const providerName = providerLabel(active?.providerType);
@@ -1453,7 +1541,8 @@ async function savePromptPreset() {
   });
   state.presets = state.presets.slice(0, 30);
   try {
-    await persistConfigs({ quiet: true });
+    await persistConfigs();
+    renderPresets();
     toast("预设已保存到本机。", "success");
   } catch (error) {
     toast(error.message || "保存预设失败。", "error");
@@ -1615,6 +1704,9 @@ function toast(message, kind = "") {
   const node = document.createElement("div");
   node.className = `toast ${kind}`;
   node.textContent = message;
-  document.body.append(node);
-  setTimeout(() => node.remove(), 3600);
+  const region = document.getElementById("toastRegion");
+  const modal = document.querySelector("dialog[open]");
+  (modal || document.body).append(region);
+  region.append(node);
+  setTimeout(() => node.remove(), kind === "error" ? 7000 : 4500);
 }

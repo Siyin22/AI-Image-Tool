@@ -265,6 +265,15 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator("#promptInput").inputValue(), draft);
     await page.goForward();
     await page.locator("#galleryPage").waitFor();
+    await page.addInitScript(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(key, value) {
+        if (key === "ai-image-tool.history.v1") {
+          throw new DOMException("Browser backup quota exceeded", "QuotaExceededError");
+        }
+        return original.call(this, key, value);
+      };
+    });
     await page.reload();
     await page.locator("#galleryGrid .image-tile").waitFor();
     assert(await page.locator("#galleryPage").isVisible());

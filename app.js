@@ -322,10 +322,21 @@ function sanitizeConfigForBackup(config) {
 }
 
 function writeLegacyBackupState() {
-  saveJson(storeKeys.configs, state.configs.map(sanitizeConfigForBackup));
-  saveJson(storeKeys.activeConfigId, state.activeConfigId);
-  saveJson(storeKeys.history, state.history);
-  saveJson(storeKeys.presets, state.presets);
+  const entries = [
+    [storeKeys.configs, state.configs.map(sanitizeConfigForBackup)],
+    [storeKeys.activeConfigId, state.activeConfigId],
+    [storeKeys.presets, state.presets],
+    [storeKeys.history, state.history]
+  ];
+  for (const [key, value] of entries) {
+    try {
+      saveJson(key, value);
+    } catch (error) {
+      // On HTTP the local service is authoritative; a browser quota failure
+      // must never turn a successful disk save/load into stale-state recovery.
+      if (location.protocol === "file:") throw error;
+    }
+  }
 }
 
 function applyLoadedState(snapshot) {
@@ -362,11 +373,12 @@ async function recoverLegacyStateToServer(legacyState, serverState) {
   const serverHasUsefulConfig = hasUsefulConfigSnapshot(serverState, { serverBacked: true });
 
   if (legacyHasUsefulConfig && !serverHasUsefulConfig) {
-    latestState = await postJson("/api/save-config-state", {
+    const configState = await postJson("/api/save-config-state", {
       configs: legacyState.configs,
       activeConfigId: legacyState.activeConfigId,
       presets: legacyState.presets
     });
+    latestState = { ...latestState, ...configState, history: latestState.history };
     recovered = true;
   }
 
@@ -1147,13 +1159,16 @@ async function generateWithFallback(retryTask, retryConfig) {
       setTaskStage("已完成", "success");
       state.lastTaskConfig = configShell;
       state.lastTaskPayload = task;
-      await prependHistory(images);
+      const historySaved = await prependHistory(images);
       renderTaskList();
       setLatestResults(images);
       renderGallery();
-      el.taskSummary.textContent = `本次生成已完成，共返回 ${images.length} 张图片。`;
-      updateStatus("生成完成。");
-      toast("生成完成。", "success");
+      el.taskSummary.textContent = historySaved
+        ? `本次生成已完成，共返回 ${images.length} 张图片，已保存到图库。`
+        : `已生成 ${images.length} 张图片，但图库保存失败，请先下载图片再关闭页面。`;
+      updateStatus(el.taskSummary.textContent);
+      if (historySaved) toast("生成完成，已保存到图库。", "success");
+      else setTaskStage("生成完成 · 未保存", "warn");
       setGenerating(false);
       stopTaskStatusPolling();
       state.currentController = null;
@@ -1343,7 +1358,13 @@ function normalizeImages(images, task, config) {
 
 async function prependHistory(images) {
   state.history = [...images, ...state.history].slice(0, 200);
-  await persistHistory({ quiet: true });
+  try {
+    await persistHistory();
+    return true;
+  } catch (error) {
+    toast(`图片已生成，但保存图库失败：${error.message}。请先下载图片，避免关闭后丢失。`, "error");
+    return false;
+  }
 }
 
 function setLatestResults(images) {

@@ -995,6 +995,16 @@ dialog::backdrop {
   display: grid;
   gap: 13px;
 }
+.config-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.config-field > label,
+.config-editor > .checkbox-row {
+  width: fit-content;
+  max-width: 100%;
+}
 .checkbox-row {
   display: flex;
   align-items: center;

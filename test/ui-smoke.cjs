@@ -182,6 +182,48 @@ const server = http.createServer((req, res) => {
     assert.match(await page.locator("#promptInput").inputValue(), /咖啡杯/);
     await page.locator("#openSettingsBtn").click();
     assert(await page.locator("#settingsDialog").isVisible());
+    for (const field of await page.locator(".config-field").all()) {
+      const label = field.locator("label");
+      const control = field.locator("input, select");
+      const id = await control.getAttribute("id");
+      const box = await field.boundingBox();
+      const labelBox = await label.boundingBox();
+      await page.mouse.click(
+        box.x + box.width - 3,
+        labelBox.y + labelBox.height / 2,
+      );
+      assert.notEqual(
+        await page.evaluate(() => document.activeElement.id),
+        id,
+        "blank space beside label must not focus " + id,
+      );
+      await label.click();
+      assert.equal(
+        await page.evaluate(() => document.activeElement.id),
+        id,
+        "field name should still focus " + id,
+      );
+    }
+    const enabledBefore = await page.locator("#enabledInput").isChecked();
+    const editorBox = await page.locator(".config-editor").boundingBox();
+    const checkboxBox = await page
+      .locator("label:has(#enabledInput)")
+      .boundingBox();
+    await page.mouse.click(
+      editorBox.x + editorBox.width - 3,
+      checkboxBox.y + checkboxBox.height / 2,
+    );
+    assert.equal(
+      await page.locator("#enabledInput").isChecked(),
+      enabledBefore,
+      "blank space must not toggle checkbox",
+    );
+    await page.locator("#configNameInput").click();
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await page.evaluate(() => document.activeElement.id),
+      "providerTypeInput",
+    );
     await page.locator("#baseUrlInput").fill("invalid");
     await page
       .getByRole("button", { name: "关闭配置中心", exact: true })

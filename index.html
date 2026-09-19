@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI生图小工具</title>
     <meta name="theme-color" content="#f3f6f9" />
-    <link rel="stylesheet" href="./styles.css?v=20260919-5" />
+    <link rel="stylesheet" href="./styles.css?v=20260919-6" />
   </head>
   <body>
     <div class="app-shell">
@@ -389,56 +389,56 @@
           </div>
 
           <div class="config-editor">
-            <label>
-              配置名称
+            <div class="config-field">
+              <label for="configNameInput">配置名称</label>
               <input
                 id="configNameInput"
                 type="text"
                 placeholder="例如：默认中转站"
               />
-            </label>
-            <label>
-              平台类型
+            </div>
+            <div class="config-field">
+              <label for="providerTypeInput">平台类型</label>
               <select id="providerTypeInput">
                 <option value="openai-compatible">OpenAI兼容</option>
                 <option value="bailian">阿里百炼</option>
                 <option value="custom">自定义</option>
               </select>
-            </label>
-            <label>
-              API Key
+            </div>
+            <div class="config-field">
+              <label for="apiKeyInput">API Key</label>
               <input
                 id="apiKeyInput"
                 type="password"
                 autocomplete="off"
                 placeholder="未保存 API Key"
               />
-            </label>
-            <label>
-              网关地址
+            </div>
+            <div class="config-field">
+              <label for="baseUrlInput">网关地址</label>
               <input
                 id="baseUrlInput"
                 type="url"
                 placeholder="https://api.openai.com/v1"
               />
-            </label>
-            <label>
-              默认模型
+            </div>
+            <div class="config-field">
+              <label for="modelInput">默认模型</label>
               <input
                 id="modelInput"
                 type="text"
                 placeholder="例如：gpt-image-1 或 wanx2.1-t2i-turbo"
               />
-            </label>
+            </div>
             <div class="split-fields">
-              <label>
-                优先级
+              <div class="config-field">
+                <label for="priorityInput">优先级</label>
                 <input id="priorityInput" type="number" min="1" value="1" />
-              </label>
-              <label>
-                超时秒数
+              </div>
+              <div class="config-field">
+                <label for="timeoutInput">超时秒数</label>
                 <input id="timeoutInput" type="number" min="15" value="120" />
-              </label>
+              </div>
             </div>
             <label class="checkbox-row">
               <input id="autoFallbackInput" type="checkbox" checked />

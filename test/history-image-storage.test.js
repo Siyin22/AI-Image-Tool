@@ -74,6 +74,22 @@ test('large legacy gallery migrates, uploads persist across restart, and oversiz
     assert.equal(response.headers.get('content-type'), 'image/png');
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), png);
     assert.equal((await fetch(base + '/history-images/settings.json')).status, 404);
+    // A shared file must survive until its final gallery reference is removed.
+    state.history.push({id:'shared',url:saved.url});
+    await post('/api/save-history-state', {history:state.history});
+    state.history = state.history.filter(item => item.id !== 'new');
+    await post('/api/save-history-state', {history:state.history});
+    assert.equal((await fetch(base + saved.url)).status, 200);
+    state.history = state.history.filter(item => item.id !== 'shared');
+    await post('/api/save-history-state', {history:state.history});
+    assert.equal(fs.existsSync(path.join(toolRoot, 'data', 'images', name)), false);
+    assert.equal((await fetch(base + saved.url)).status, 404);
+    // A pending upload is not a deleted gallery entry and must not be swept away.
+    const pending = await (await fetch(base + '/api/store-history-image', {method:'POST',body:png})).json();
+    const cleared = await (await post('/api/save-history-state', {history:[]})).json();
+    assert.deepEqual(cleared.cleanupWarnings, []);
+    assert.equal((await fetch(base + state.history[0].url)).status, 404);
+    assert.equal((await fetch(base + pending.url)).status, 200);
   } finally {
     await stop();
     fs.rmSync(temporary, {recursive:true,force:true});

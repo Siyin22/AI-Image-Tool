@@ -282,9 +282,22 @@ function saveConfigState(rawState) {
 function saveHistoryState(rawState) {
   const nextState = normalizeHistoryState(rawState);
   nextState.history = localizeHistoryImages(nextState.history);
+  const previousImages = historyStateCache.history.map(item => item.url);
   writeJsonFile(historyStateFile, nextState);
   historyStateCache = nextState;
-  return nextState;
+  const retained = new Set(nextState.history.map(item => item.url));
+  const cleanupWarnings = [];
+  for (const url of new Set(previousImages)) {
+    if (retained.has(url)) continue;
+    const match = /^\/history-images\/([a-f0-9]{64}\.img)$/.exec(url || "");
+    if (!match) continue;
+    try {
+      fs.rmSync(path.join(historyImageDir, match[1]), { force: true });
+    } catch {
+      cleanupWarnings.push("图库记录已删除，但本地图片文件清理失败，请检查文件占用或目录权限。");
+    }
+  }
+  return { ...nextState, cleanupWarnings };
 }
 
 function sanitizeConfigForClient(config) {
@@ -1161,10 +1174,10 @@ async function handleApi(req, res, route) {
       return;
     }
     if (route === "/api/save-history-state") {
-      saveHistoryState({
+      const saved = saveHistoryState({
         history: payload.history
       });
-      sendJson(res, 200, { ok: true, history: cloneJson(historyStateCache.history) });
+      sendJson(res, 200, { ok: true, history: cloneJson(historyStateCache.history), cleanupWarnings: saved.cleanupWarnings });
       return;
     }
     if (route === "/api/delete-reference") {

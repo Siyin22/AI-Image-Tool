@@ -73,3 +73,11 @@ test('failed image upload keeps original bytes available for download', async ()
   assert.match(page.run('notices[0]'),/Image disk full/);
   assert.equal(page.requests.length,0);
 });
+test('failed deletion retains the gallery and reports failure', async () => {
+  const page = browser({history:[]},{failSave:true});
+  page.run('state.history = [{id:"keep"}]; state.latestResults = [{id:"keep"}]; globalThis.notices = []; toast = message => notices.push(message)');
+  await page.run('deleteImage("keep")');
+  assert.equal(page.run('state.history[0].id'), 'keep');
+  assert.equal(page.run('state.latestResults[0].id'), 'keep');
+  assert.match(page.run('notices[0]'), /删除失败/);
+});

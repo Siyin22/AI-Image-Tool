@@ -1597,40 +1597,43 @@ function exportHistory() {
   setTimeout(() => URL.revokeObjectURL(link.href), 3000);
 }
 
-async function clearHistory() {
-  if (!state.history.length) return;
-  if (!confirm("清理全部图库历史？")) return;
-  state.history = [];
-  state.latestResults = [];
-  state.selectedGalleryIds.clear();
-  await persistHistory({ quiet: true });
+async function removeHistoryImages(ids, successMessage) {
+  const previous = state.history;
+  state.history = previous.filter(item => !ids.has(item.id));
+  let saved;
+  try {
+    saved = await persistHistory();
+  } catch (error) {
+    state.history = previous;
+    toast(`删除失败：${error.message}`, "error");
+    return;
+  }
+  state.latestResults = state.latestResults.filter(item => !ids.has(item.id));
+  for (const id of ids) state.selectedGalleryIds.delete(id);
   renderResults(state.latestResults);
   renderGallery();
-  toast("图库历史已清理。", "success");
+  if (saved?.cleanupWarnings?.length) {
+    toast(saved.cleanupWarnings[0], "warn");
+  } else {
+    toast(successMessage, "success");
+  }
+}
+
+async function clearHistory() {
+  if (!state.history.length) return;
+  if (!confirm("清理全部图库历史及对应的本地图片文件？")) return;
+  await removeHistoryImages(new Set(state.history.map(item => item.id)), "图库历史及对应图片已清理。");
 }
 
 async function deleteImage(imageId) {
-  state.history = state.history.filter(item => item.id !== imageId);
-  state.latestResults = state.latestResults.filter(item => item.id !== imageId);
-  state.selectedGalleryIds.delete(imageId);
-  await persistHistory({ quiet: true });
-  renderResults(state.latestResults);
-  renderGallery();
-  toast("图片已删除。", "success");
+  await removeHistoryImages(new Set([imageId]), "图片已删除。");
 }
 
 async function deleteSelectedImages() {
   const ids = [...state.selectedGalleryIds];
   if (!ids.length) return;
-  if (!confirm(`删除选中的 ${ids.length} 张图片？`)) return;
-  const idSet = new Set(ids);
-  state.history = state.history.filter(item => !idSet.has(item.id));
-  state.latestResults = state.latestResults.filter(item => !idSet.has(item.id));
-  state.selectedGalleryIds.clear();
-  await persistHistory({ quiet: true });
-  renderResults(state.latestResults);
-  renderGallery();
-  toast("选中图片已删除。", "success");
+  if (!confirm(`删除选中的 ${ids.length} 张图片及对应的本地文件？`)) return;
+  await removeHistoryImages(new Set(ids), "选中图片已删除。");
 }
 
 function updateSelectedDeleteButton() {

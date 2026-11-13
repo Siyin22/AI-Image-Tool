@@ -10,6 +10,8 @@ function browser(serverState, options = {}) {
   const context = vm.createContext({
     document: {addEventListener() {}},
     location: {protocol:'http:'},
+    atob,
+    Uint8Array,
     localStorage: {
       getItem: key => data.get(key) || null,
       setItem(key, value) {
@@ -20,6 +22,10 @@ function browser(serverState, options = {}) {
       }
     },
     fetch: async (url, request) => {
+      if (url === '/api/store-history-image') {
+        if (options.failImage) return {ok:false,json:async()=>({message:'Image disk full'})};
+        return {ok:true,json:async()=>({ok:true,url:'/history-images/test.img'})};
+      }
       const payload = JSON.parse(request.body);
       requests.push({url,payload});
       if (options.failSave && url === '/api/save-history-state') return {ok:false,json:async()=>({message:'Disk full'})};
@@ -44,11 +50,13 @@ test('reopening retains disk history when large image backup exceeds browser quo
 test('successful disk save stays successful despite failed browser backup and survives a new page', async () => {
   const disk = {configs:[],presets:[],history:[]};
   const first = browser(disk);
-  first.run('state.history = [{id:"new-image", b64:"image-data"}]');
+  first.run('state.history = [{id:"new-image", b64:"aW1hZ2UtZGF0YQ=="}]');
   await first.run('persistHistory()');
   const reopened = browser(disk);
   await reopened.run('loadState()');
   assert.equal(reopened.run('state.history[0].id'),'new-image');
+  assert.equal(reopened.run('state.history[0].b64'),'');
+  assert.equal(reopened.run('state.history[0].url'),'/history-images/test.img');
 });
 test('failed history save is reported without losing generated images or claiming persistence', async () => {
   const page = browser({history:[]},{failSave:true});
@@ -56,4 +64,12 @@ test('failed history save is reported without losing generated images or claimin
   assert.equal(await page.run('prependHistory([{id:"unsaved"}])'),false);
   assert.equal(page.run('state.history[0].id'),'unsaved');
   assert.match(page.run('notices[0]'),/Disk full/);
+});
+test('failed image upload keeps original bytes available for download', async () => {
+  const page = browser({history:[]},{failImage:true});
+  page.run('globalThis.notices = []; toast = message => notices.push(message)');
+  assert.equal(await page.run('prependHistory([{id:"unsaved",b64:"aW1hZ2U="}])'),false);
+  assert.equal(page.run('state.history[0].b64'),'aW1hZ2U=');
+  assert.match(page.run('notices[0]'),/Image disk full/);
+  assert.equal(page.requests.length,0);
 });

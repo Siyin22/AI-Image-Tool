@@ -19,6 +19,7 @@ const warmedHosts = new Set();
 const storageDir = path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "AIImageTool");
 const configStateFile = path.join(storageDir, "settings.json");
 const historyStateFile = path.join(storageDir, "history.json");
+const historyImageDir = path.join(root, "data", "images");
 const maxReferenceUploadBytes = 50 * 1024 * 1024;
 const bailianReferenceLimits = {
   maxImages: 3,
@@ -215,7 +216,13 @@ function readJsonFile(filePath, fallbackFactory) {
 
 function writeJsonFile(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf8");
+  const temporary = `${filePath}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value, null, 2), "utf8");
+    fs.renameSync(temporary, filePath);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
 }
 
 function loadConfigState() {
@@ -223,7 +230,46 @@ function loadConfigState() {
 }
 
 function loadHistoryState() {
-  return normalizeHistoryState(readJsonFile(historyStateFile, defaultHistoryState));
+  const state = normalizeHistoryState(readJsonFile(historyStateFile, defaultHistoryState));
+  for (const item of state.history) {
+    const match = /^\/history-images\/([a-f0-9]{64}\.img)$/.exec(item.url || "");
+    if (!match || fs.existsSync(path.join(historyImageDir, match[1]))) continue;
+    const previous = path.join(storageDir, "images", match[1]);
+    if (fs.existsSync(previous)) {
+      // Retain the old copy so moving storage never removes the user's backup.
+      storeHistoryImage(fs.readFileSync(previous));
+    }
+  }
+  if (state.history.some(item => item.b64)) {
+    // Keep the original intact until every image has been written successfully.
+    fs.copyFileSync(historyStateFile, `${historyStateFile}.${Date.now()}.bak`);
+    state.history = localizeHistoryImages(state.history);
+    writeJsonFile(historyStateFile, state);
+  }
+  return state;
+}
+
+function storeHistoryImage(buffer) {
+  if (!buffer.length) throw userError("图片内容为空。", "invalid_image");
+  const name = `${crypto.createHash("sha256").update(buffer).digest("hex")}.img`;
+  fs.mkdirSync(historyImageDir, { recursive: true });
+  const target = path.join(historyImageDir, name);
+  if (!fs.existsSync(target)) {
+    const temporary = `${target}.${crypto.randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(temporary, buffer);
+      fs.renameSync(temporary, target);
+    } finally {
+      fs.rmSync(temporary, { force: true });
+    }
+  }
+  return `/history-images/${name}`;
+}
+
+function localizeHistoryImages(images) {
+  return images.map(item => item.b64
+    ? { ...item, url: storeHistoryImage(Buffer.from(item.b64, "base64")), b64: "" }
+    : item);
 }
 
 function saveConfigState(rawState) {
@@ -235,6 +281,7 @@ function saveConfigState(rawState) {
 
 function saveHistoryState(rawState) {
   const nextState = normalizeHistoryState(rawState);
+  nextState.history = localizeHistoryImages(nextState.history);
   writeJsonFile(historyStateFile, nextState);
   historyStateCache = nextState;
   return nextState;
@@ -431,16 +478,24 @@ function sendText(res, status, text) {
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let raw = "";
+    let chunks = [];
+    let size = 0;
+    let exceeded = false;
     req.on("data", chunk => {
-      raw += chunk;
-      if (raw.length > 32 * 1024 * 1024) {
-        reject(new Error("请求体过大"));
-        req.destroy();
+      if (exceeded) return;
+      size += chunk.length;
+      if (size > 32 * 1024 * 1024) {
+        exceeded = true;
+        chunks = [];
+        reject(userError("请求体超过 32 MiB，请刷新页面后重试保存。", "payload_too_large"));
+        return;
       }
+      chunks.push(chunk);
     });
     req.on("end", () => {
+      if (exceeded) return;
       try {
+        const raw = Buffer.concat(chunks).toString("utf8");
         resolve(raw ? JSON.parse(raw) : {});
       } catch {
         reject(new Error("JSON 格式无效"));
@@ -454,16 +509,19 @@ function readBinaryBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
+    let exceeded = false;
     req.on("data", chunk => {
+      if (exceeded) return;
       size += chunk.length;
       if (size > maxBytes) {
+        exceeded = true;
+        chunks.length = 0;
         reject(userError("上传文件过大。", "payload_too_large"));
-        req.destroy();
         return;
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("end", () => { if (!exceeded) resolve(Buffer.concat(chunks)); });
     req.on("error", reject);
   });
 }
@@ -1043,6 +1101,11 @@ async function testConfig(config) {
 
 async function handleApi(req, res, route) {
   try {
+    if (route === "/api/store-history-image") {
+      const buffer = await readBinaryBody(req, maxReferenceUploadBytes);
+      sendJson(res, 200, { ok: true, url: storeHistoryImage(buffer) });
+      return;
+    }
     if (route === "/api/task-status") {
       const payload = await readBody(req);
       const taskId = payload.taskId;
@@ -1164,7 +1227,7 @@ async function handleApi(req, res, route) {
     sendJson(res, 404, { ok: false, message: "接口不存在。" });
   } catch (error) {
     const message = error.userMessage || error.message || "未知错误";
-    sendJson(res, 400, {
+    sendJson(res, error.code === "payload_too_large" ? 413 : 400, {
       ok: false,
       code: error.code || "unknown",
       message,
@@ -1207,6 +1270,22 @@ function createServer() {
       sendText(res, 405, "Method not allowed");
       return;
     }
+    if (parsed.pathname.startsWith("/history-images/")) {
+      const name = parsed.pathname.slice("/history-images/".length);
+      if (!/^[a-f0-9]{64}\.img$/.test(name)) {
+        sendText(res, 404, "Not found");
+        return;
+      }
+      fs.readFile(path.join(historyImageDir, name), (error, data) => {
+        if (error) return sendText(res, 404, "Not found");
+        const type = data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) ? "image/jpeg"
+          : data.subarray(0, 4).toString() === "RIFF" ? "image/webp"
+          : data.subarray(0, 3).toString() === "GIF" ? "image/gif" : "image/png";
+        res.writeHead(200, { "Content-Type": type, "X-Content-Type-Options": "nosniff" });
+        res.end(data);
+      });
+      return;
+    }
     serveStatic(req, res, parsed.pathname);
   });
 }
@@ -1223,7 +1302,7 @@ function start(port) {
     process.exit(1);
   });
   server.listen(port, host, () => {
-    console.log(`AI生图小工具已启动：http://${host}:${port}`);
+    console.log(`AI生图小工具已启动：http://${host}:${server.address().port}`);
   });
 }
 

@@ -529,6 +529,22 @@ async function persistHistory(options = {}) {
     return null;
   }
   try {
+    // Upload images separately so accumulated Base64 data never fills the JSON request.
+    for (const item of state.history) {
+      if (!item.b64) continue;
+      const bytes = Uint8Array.from(atob(item.b64), character => character.charCodeAt(0));
+      const response = await fetch("/api/store-history-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: bytes
+      });
+      const saved = await response.json();
+      if (!response.ok || saved.ok === false || !saved.url) {
+        throw new Error(saved.message || "图片保存失败。");
+      }
+      item.url = saved.url;
+      item.b64 = "";
+    }
     const json = await postJson("/api/save-history-state", {
       history: state.history
     });

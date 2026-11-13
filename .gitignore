@@ -21,6 +21,7 @@ server.verify.*.log
 *secret*
 
 # Local app data backups
+/data/
 AIImageTool/
 settings.json
 history.json

@@ -188,7 +188,7 @@ test("rejects reference uploads above the per-file cap", { timeout: 20_000 }, as
   const appUrl = await startApp(t);
 
   const rejected = await uploadReference(appUrl, "huge.png", 60 * 1024 * 1024);
-  assert.equal(rejected.status, 400);
+  assert.equal(rejected.status, 413);
   assert.equal(rejected.json.code, "payload_too_large");
   assert.match(rejected.json.message, /50MB/);
 
